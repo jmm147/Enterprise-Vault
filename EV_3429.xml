@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<Settings>
+	<EmailSettings>
+		<SMTPServer>smtp.your.domain</SMTPServer>
+		<SMTPPort>25</SMTPPort>
+		<MailFrom>exchangeserver@your.domain.eu</MailFrom>
+		<MailTo>backup.admins@your.domain.eu</MailTo>
+	</EmailSettings>
+</Settings>
