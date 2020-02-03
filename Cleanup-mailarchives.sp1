@@ -1,0 +1,133 @@
+<#
+.SYNOPSIS
+Cleanup-mailarchives.ps1 - Enterprise Vault archive cleanup script. MUST BE RAN FROM EV Server
+
+.DESCRIPTION 
+Simple Script for removing Mailbox archives in Enterprise Vault which sends an audit report by mail.
+
+.OUTPUTS
+Outputs to HTML file and email for auditing.
+
+.INPUTS 
+Text file with SAMAccount name of the user(s) to be deleted.
+
+.EXAMPLE
+.\Cleanup-mailarchives.ps1 -MailEnabled
+Removes Enterprise Vault mailbox archives for specified user(s) and emails a HTML file.
+
+.EXAMPLE
+.\Cleanup-mailarchives.ps1
+Removes Enterprise Vault mailbox archives for specified user(s) and outputs to a HTML file.
+
+.NOTES
+Written By: Jason McColl
+Email: jason.mccoll@outlook.com
+
+Copyright (c) 2020 Jason M McColl
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Change Log
+V1.0, 03/02/2020 - Initial Version
+
+#>
+
+[CmdletBinding()]
+param(
+	[Parameter(Mandatory=$false)]
+	[string]$textfile = "users.txt",
+
+	[Parameter(Mandatory=$false)]
+	[switch]$MailEnabled
+	)
+
+$myDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Date = Get-Date
+$File = "C:\Temp\ArchiveDeletions_" + $Date.Tostring('HHmm-MMddyyyy') + ".htm"
+
+#Mail settings (Modify the information here)
+$ToMail = "your.emailaddress@yourdomain.com"
+$FromMail = "EVArchiveDeletions@yourdomain.com"
+$SmtpServer = "smtp.yourdomain"
+
+#CSS style
+$css= "<style>"
+$css= $css+ "BODY{ text-align: center; background-color:white;}"
+$css= $css+ "TABLE{    font-family: 'Lucida Sans Unicode', 'Lucida Grande', Sans-Serif;font-size: 12px;margin: 10px;width: 100%;text-align: center;border-collapse: collapse;border-top: 7px solid #004466;border-bottom: 7px solid #004466;}"
+$css= $css+ "TH{font-size: 13px;font-weight: normal;padding: 1px;background: #cceeff;border-right: 1px solid #004466;border-left: 1px solid #004466;color: #004466;}"
+$css= $css+ "TD{padding: 1px;background: #e5f7ff;border-right: 1px solid #004466;border-left: 1px solid #004466;color: #669;hover:black;}"
+$css= $css+  "TD:hover{ background-color:#004466;}"
+$css= $css+ "</style>"
+
+#Check for presence of userlist.txt file and exit if not found.
+if (!(Test-Path "$($MyDir)\$textfile"))
+{
+    Write-Warning "File, $textfile, which contains userlist not found."
+    EXIT
+}
+
+#Set execution policy to allow this script execution
+Set-ExecutionPolicy unrestricted
+Import-Module 'D:\Program Files (x86)\Enterprise Vault\Symantec.EnterpriseVault.PowerShell.Snapin.dll'
+$Userlist = Get-Content $textfile
+$validusertable = @()
+$failedusertable = @()
+foreach ($user in $UserList) {
+    try {
+        $ADUser = Get-ADUser -Identity $user -Properties DisplayName -ErrorAction Stop
+    }
+    catch {
+        if ($_ -like "*Cannot find an object with identity: '$user'*") {
+            $userfObj = New-Object PSObject
+            $userfObj | Add-Member -Name "SAM Account Name" -MemberType NoteProperty -Value $user
+            $userfObj | Add-Member -Name "Status" -MemberType NoteProperty -Value "Manual intervention required"
+            $failedusertable += $userfObj
+        }
+        else {
+            "An error occurred: $_"
+        }
+        continue
+    }
+    "User '$($ADUser.SamAccountName)' exists."
+        
+    Write-Host -ForegroundColor Green $ADUser.DisplayName
+    $evid = Get-EVArchive -ArchiveName $ADUser.DisplayName
+    Write-Host -ForegroundColor Cyan $evid.archiveid
+
+    $uservObj = New-Object PSObject
+    $uservObj | Add-Member -Name "Archive Name" -MemberType NoteProperty -Value $evid.ArchiveName
+    $uservObj | Add-Member -Name "SAM Account Name" -MemberType NoteProperty -Value $ADUser.SamAccountName
+    $uservObj | Add-Member -Name "Email Address" -MemberType NoteProperty -Value $ADUser.UserPrincipalName
+    $uservObj | Add-Member -Name "Archive ID" -MemberType NoteProperty -Value $evid.ArchiveID
+    $validusertable += $uservObj
+    Remove-EVArchive -ArchiveId $evid.ArchiveId -Confirm:$False
+}
+
+#Sort report tables
+$validusertable = $validusertable | Sort-Object "Archive Name"
+$failedusertable = $failedusertable | Sort-Object "SAM Account Name"
+
+#Creation of the body for the email
+$body = "<center><h1>Mailbox Archive Deletion Report</h1></center>" 
+$body += "<center>By  $sig</a></center>"
+$body += "<h4>The following user(s) Mailbox Archives</h4>" 
+$body += $validusertable | ConvertTo-Html -Head $css 
+
+$body += "<h4>The following user(s) do not appear to have mailbox archives</h4>" 
+$body += $failedusertable | ConvertTo-Html -Head $css 
+
+# If enabled send mail
+if ($MailEnabled) {
+    send-mailmessage -to $ToMail -from $FromMail -subject "Mailbox Archive Deletions" -body ($body | out-string) -BodyAsHTML -SmtpServer $SmtpServer
+} else {
+    $body | Out-File $File
+}
